@@ -13,8 +13,8 @@ import com.amazonaws.services.lambda.runtime.LambdaLogger;
 import java.lang.StringBuilder;
 
 
-import javax.servlet.ServletConfig;
-import javax.servlet.http.HttpServlet;
+import jakarta.servlet.ServletConfig;
+import jakarta.servlet.http.HttpServlet;
 import java.io.*;
 
 public class StreamLambdaHandler implements RequestStreamHandler {
