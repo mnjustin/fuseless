@@ -1,7 +1,7 @@
 package com.foundeo.fuseless;
 
-import jakarta.servlet.*;
-import jakarta.servlet.descriptor.JspConfigDescriptor;
+import javax.servlet.*;
+import javax.servlet.descriptor.JspConfigDescriptor;
 
 import java.io.InputStream;
 import java.net.MalformedURLException;

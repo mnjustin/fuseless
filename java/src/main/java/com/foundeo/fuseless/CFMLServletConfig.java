@@ -1,9 +1,9 @@
 package com.foundeo.fuseless;
 
-import jakarta.servlet.*;
+import javax.servlet.*;
 import java.util.Enumeration;
 
-public class CFMLServletConfig implements jakarta.servlet.ServletConfig {
+public class CFMLServletConfig implements javax.servlet.ServletConfig {
 		private ServletContext sc;
 
 		public CFMLServletConfig(ServletContext servletContext) {
