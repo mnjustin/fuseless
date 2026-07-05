@@ -52,11 +52,24 @@ public class StreamLambdaHandler implements RequestStreamHandler {
         Core.getGlobalContext().register(CRAC_PRIMING_RESOURCE);
     }
 
+    // Representative routes to prime, covering more of the JIT-compiled code
+    // paths real traffic exercises than a single route would: page rendering
+    // (/index.cfm), session creation + CSRF token generation + hashing +
+    // Postgres-backed session storage (/applogin.cfm), and the JDBC/connection
+    // pool query path (/tests/querydb-test.cfm, no auth required). See
+    // mnjustin/hnr1#64 for the restore-time data motivating this expansion.
+    private static final String[] PRIMING_ROUTES = {
+        "/index.cfm",
+        "/applogin.cfm",
+        "/tests/querydb-test.cfm"
+    };
+
     /**
-     * Sends a representative request or two through the CFML handler before
-     * the SnapStart snapshot is taken, so their JIT-compiled hot paths are
+     * Sends representative requests through the CFML handler before the
+     * SnapStart snapshot is taken, so their JIT-compiled hot paths are
      * captured in the snapshot instead of being paid for on the first live
-     * request after restore. Failures here must not prevent the checkpoint
+     * request after restore. Each route is primed independently — one
+     * route's failure must not skip the others or prevent the checkpoint
      * from proceeding.
      */
     private static void primeJit() {
@@ -64,25 +77,27 @@ public class StreamLambdaHandler implements RequestStreamHandler {
             log("primeJit: handler not initialized, skipping priming");
             return;
         }
-        try {
-            AwsProxyRequest req = new AwsProxyRequest();
-            req.setHttpMethod("GET");
-            req.setPath("/index.cfm");
-            req.setBody("");
+        for (String route : PRIMING_ROUTES) {
+            try {
+                AwsProxyRequest req = new AwsProxyRequest();
+                req.setHttpMethod("GET");
+                req.setPath(route);
+                req.setBody("");
 
-            AwsProxyRequestContext requestContext = new AwsProxyRequestContext();
-            // A real API Gateway request always has an identity; without one,
-            // ApacheCombinedServletLogFormatter.format() NPEs on
-            // gatewayContext.getIdentity().getUserArn() (RequestSource defaults
-            // to API_GATEWAY whenever no ELB context is set).
-            requestContext.setIdentity(new ApiGatewayRequestIdentity());
-            req.setRequestContext(requestContext);
+                AwsProxyRequestContext requestContext = new AwsProxyRequestContext();
+                // A real API Gateway request always has an identity; without one,
+                // ApacheCombinedServletLogFormatter.format() NPEs on
+                // gatewayContext.getIdentity().getUserArn() (RequestSource defaults
+                // to API_GATEWAY whenever no ELB context is set).
+                requestContext.setIdentity(new ApiGatewayRequestIdentity());
+                req.setRequestContext(requestContext);
 
-            long start = System.currentTimeMillis();
-            handler.proxy(req, new PrimingContext());
-            log("primeJit: warmup request completed in " + (System.currentTimeMillis() - start) + "ms");
-        } catch (Throwable t) {
-            log("primeJit: warmup request failed, continuing checkpoint anyway", t);
+                long start = System.currentTimeMillis();
+                handler.proxy(req, new PrimingContext());
+                log("primeJit: warmup request to " + route + " completed in " + (System.currentTimeMillis() - start) + "ms");
+            } catch (Throwable t) {
+                log("primeJit: warmup request to " + route + " failed, continuing with remaining routes", t);
+            }
         }
     }
 
