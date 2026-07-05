@@ -2,6 +2,7 @@ package com.foundeo.fuseless;
 
 import com.amazonaws.serverless.exceptions.ContainerInitializationException;
 import com.amazonaws.serverless.proxy.model.AwsProxyRequest;
+import com.amazonaws.serverless.proxy.model.AwsProxyRequestContext;
 import com.amazonaws.serverless.proxy.model.AwsProxyResponse;
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestStreamHandler;
@@ -12,6 +13,8 @@ import com.amazonaws.services.lambda.runtime.LambdaLogger;
 
 import java.lang.StringBuilder;
 
+import org.crac.Core;
+import org.crac.Resource;
 
 import jakarta.servlet.ServletConfig;
 import jakarta.servlet.http.HttpServlet;
@@ -19,12 +22,61 @@ import java.io.*;
 
 public class StreamLambdaHandler implements RequestStreamHandler {
     private static final LambdaLogger logger = LambdaRuntime.getLogger();
-    
+
     private static CFMLLambdaContainerHandler<AwsProxyRequest, AwsProxyResponse> handler;
 
     private static HttpServlet cfmlServlet = null;
 
     public static boolean ENABLE_XRAY = false;
+
+    // CRaC priming: sends representative requests through the handler in
+    // beforeCheckpoint so their JIT-compiled code paths are baked into the
+    // SnapStart snapshot. Held as a strong static reference per the CRaC
+    // Resource contract (Context only holds a WeakReference; an unreferenced
+    // registration is garbage collected and its hooks silently never run).
+    // See mnjustin/hnr1#64.
+    private static final Resource CRAC_PRIMING_RESOURCE = new Resource() {
+        @Override
+        public void beforeCheckpoint(org.crac.Context<? extends Resource> context) {
+            primeJit();
+        }
+
+        @Override
+        public void afterRestore(org.crac.Context<? extends Resource> context) {
+            // no-op: priming runs before the snapshot is taken, not after restore
+        }
+    };
+
+    static {
+        Core.getGlobalContext().register(CRAC_PRIMING_RESOURCE);
+    }
+
+    /**
+     * Sends a representative request or two through the CFML handler before
+     * the SnapStart snapshot is taken, so their JIT-compiled hot paths are
+     * captured in the snapshot instead of being paid for on the first live
+     * request after restore. Failures here must not prevent the checkpoint
+     * from proceeding.
+     */
+    private static void primeJit() {
+        if (handler == null || cfmlServlet == null) {
+            log("primeJit: handler not initialized, skipping priming");
+            return;
+        }
+        try {
+            AwsProxyRequest req = new AwsProxyRequest();
+            req.setHttpMethod("GET");
+            req.setPath("/index.cfm");
+            req.setBody("");
+            req.setRequestContext(new AwsProxyRequestContext());
+
+            long start = System.currentTimeMillis();
+            handler.proxy(req, new PrimingContext());
+            log("primeJit: warmup request completed in " + (System.currentTimeMillis() - start) + "ms");
+        } catch (Throwable t) {
+            log("primeJit: warmup request failed, continuing checkpoint anyway", t);
+        }
+    }
 
     static {
         try {
@@ -162,7 +214,66 @@ public class StreamLambdaHandler implements RequestStreamHandler {
         handler.handleRequest(inputStream, outputStream, context);
     }
 
-    
+    /**
+     * Minimal no-op Lambda Context for driving a synthetic warmup request in
+     * beforeCheckpoint, when there is no live invocation context available.
+     * Unlike FuseLessContext, this does not wrap or delegate to a real Context.
+     */
+    private static final class PrimingContext implements Context {
+        @Override
+        public String getAwsRequestId() {
+            return "crac-priming";
+        }
 
+        @Override
+        public String getLogGroupName() {
+            return null;
+        }
+
+        @Override
+        public String getLogStreamName() {
+            return null;
+        }
+
+        @Override
+        public String getFunctionName() {
+            return null;
+        }
+
+        @Override
+        public String getFunctionVersion() {
+            return null;
+        }
+
+        @Override
+        public String getInvokedFunctionArn() {
+            return null;
+        }
+
+        @Override
+        public com.amazonaws.services.lambda.runtime.CognitoIdentity getIdentity() {
+            return null;
+        }
+
+        @Override
+        public com.amazonaws.services.lambda.runtime.ClientContext getClientContext() {
+            return null;
+        }
+
+        @Override
+        public int getRemainingTimeInMillis() {
+            return Integer.MAX_VALUE;
+        }
+
+        @Override
+        public int getMemoryLimitInMB() {
+            return 0;
+        }
+
+        @Override
+        public LambdaLogger getLogger() {
+            return logger;
+        }
+    }
 
 }
