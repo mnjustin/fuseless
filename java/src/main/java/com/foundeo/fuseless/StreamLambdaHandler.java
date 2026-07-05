@@ -58,6 +58,19 @@ public class StreamLambdaHandler implements RequestStreamHandler {
     // Postgres-backed session storage (/applogin.cfm), and the JDBC/connection
     // pool query path (/tests/querydb-test.cfm, no auth required). See
     // mnjustin/hnr1#64 for the restore-time data motivating this expansion.
+    //
+    // IMPORTANT — this FuseLess fork is shared across multiple hnr1-family
+    // projects (ledgerbug, hamahaki, mnjustin) that each build their own
+    // deploy from this same source. These specific paths are hnr1
+    // application pages, not FuseLess framework routes — they will not
+    // exist verbatim in every project. A missing route just fails priming
+    // for that one route (caught below, logged, checkpoint still proceeds)
+    // rather than breaking the deploy, but it silently primes nothing useful
+    // for that project on that route. If/when this technique is adopted by
+    // another project, either add that project's equivalent routes here, or
+    // (better, not yet done — deferred until the technique is proven out on
+    // hnr1 first) make this list configurable per-project, e.g. via an
+    // environment variable read at cold start, instead of hardcoding it here.
     private static final String[] PRIMING_ROUTES = {
         "/index.cfm",
         "/applogin.cfm",
