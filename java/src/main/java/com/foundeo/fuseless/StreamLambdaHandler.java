@@ -1,6 +1,7 @@
 package com.foundeo.fuseless;
 
 import com.amazonaws.serverless.exceptions.ContainerInitializationException;
+import com.amazonaws.serverless.proxy.model.ApiGatewayRequestIdentity;
 import com.amazonaws.serverless.proxy.model.AwsProxyRequest;
 import com.amazonaws.serverless.proxy.model.AwsProxyRequestContext;
 import com.amazonaws.serverless.proxy.model.AwsProxyResponse;
@@ -68,7 +69,14 @@ public class StreamLambdaHandler implements RequestStreamHandler {
             req.setHttpMethod("GET");
             req.setPath("/index.cfm");
             req.setBody("");
-            req.setRequestContext(new AwsProxyRequestContext());
+
+            AwsProxyRequestContext requestContext = new AwsProxyRequestContext();
+            // A real API Gateway request always has an identity; without one,
+            // ApacheCombinedServletLogFormatter.format() NPEs on
+            // gatewayContext.getIdentity().getUserArn() (RequestSource defaults
+            // to API_GATEWAY whenever no ELB context is set).
+            requestContext.setIdentity(new ApiGatewayRequestIdentity());
+            req.setRequestContext(requestContext);
 
             long start = System.currentTimeMillis();
             handler.proxy(req, new PrimingContext());
