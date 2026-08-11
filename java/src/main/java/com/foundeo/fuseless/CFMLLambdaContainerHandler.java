@@ -114,6 +114,39 @@ public class CFMLLambdaContainerHandler<RequestType, ResponseType>
             if (StreamLambdaHandler.ENABLE_XRAY) {
                 AWSXRay.endSubsegment();
             }
+
+            // Guarantee the response is committed before we return.
+            //
+            // AwsHttpServletResponse.flushBuffer() is the ONLY caller of
+            // countDown() on the latch that LambdaContainerHandler.proxy() is
+            // blocked on. If the servlet returns without committing, nothing
+            // releases that latch and the invocation hangs until the Lambda
+            // runtime interrupts it — surfacing as an InterruptedException at
+            // CountDownLatch.await() and a 503 to the client.
+            //
+            // aws-serverless-java-container guards against this itself, in
+            // AwsLambdaServletContainerHandler.doFilter(). FuseLess calls
+            // service() directly rather than going through the filter chain, so
+            // that guard is never reached and this replicates it.
+            //
+            // In finally rather than after service() so it also covers the case
+            // where the servlet throws and the catch above swallows it — that
+            // path leaves the response uncommitted too.
+            //
+            // The log line is not incidental: without it this fault becomes
+            // silent rather than fixed, and the underlying condition (why the
+            // servlet sometimes returns uncommitted) stops being observable.
+            try {
+                if (!httpServletResponse.isCommitted()) {
+                    StreamLambdaHandler.log("Response not committed after service(); forcing flush. path=" + req.getRequestURI());
+                    httpServletResponse.flushBuffer();
+                }
+            } catch (Throwable flushError) {
+                // Never let the guard itself break the request. If the flush
+                // fails, the latch stays uncounted and the original hang
+                // returns — no worse than not having tried.
+                StreamLambdaHandler.log("Failed to force flush of uncommitted response: ", flushError);
+            }
         }
     }
 
