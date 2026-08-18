@@ -106,10 +106,40 @@ public class CFMLLambdaContainerHandler<RequestType, ResponseType>
             t.printStackTrace();
 
             StreamLambdaHandler.log("CFMLLambdaContainerHandler Servlet Request Threw Exception: ", t);
-            
-            if (seg != null) {  
+
+            if (seg != null) {
                 ((Subsegment)seg).addException(t);
             }
+
+            // Send a 500 so the client learns the request failed.
+            //
+            // Without this, the finally block below commits the response with no
+            // status ever set. AwsHttpServletResponse.getStatus() returns
+            // `statusCode <= 0 ? SC_OK : statusCode`, so a servlet that threw
+            // before setting a status is reported to the client as HTTP 200 with
+            // an empty body — a failure that looks like a success to the caller
+            // and to any monitoring keyed on status codes.
+            //
+            // sendError() routes through flushBuffer(), which is the only caller
+            // of countDown() on the latch, so this also releases the waiting
+            // thread on its own. (hnr1 #176)
+            try {
+                if (!httpServletResponse.isCommitted()) {
+                    httpServletResponse.sendError(500);
+                }
+            } catch (Throwable responseFailure) {
+                StreamLambdaHandler.log("Failed to send error response: ", responseFailure);
+            }
+
+            // Do not absorb JVM-level errors. An OutOfMemoryError or
+            // StackOverflowError swallowed here leaves the container in an
+            // unknown state while reporting a normal response; letting it
+            // propagate lets the Lambda runtime fail the invocation loudly and
+            // replace the execution environment.
+            if (t instanceof Error) {
+                throw (Error) t;
+            }
+
         } finally {
             if (StreamLambdaHandler.ENABLE_XRAY) {
                 AWSXRay.endSubsegment();
